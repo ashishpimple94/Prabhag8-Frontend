@@ -54,7 +54,7 @@ function App() {
   const [showModal, setShowModal] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredVoters, setFilteredVoters] = useState([]);
-  const [totalCount, setTotalCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(95645);
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -240,7 +240,7 @@ function App() {
       
       // Display first page immediately and hide loading
         setVoters(allVoters);
-      setTotalCount(totalCount || allVoters.length);
+      setTotalCount(totalCount || 95645 || allVoters.length);
       setLoading(false); // Hide loading once first page is loaded
       const dataSizeMB = (JSON.stringify(allVoters).length / 1024 / 1024).toFixed(2);
       console.log(`📊 First page loaded: ${allVoters.length} voters (${dataSizeMB} MB)`);
@@ -1339,7 +1339,7 @@ function App() {
           <div className="total-voters-info">
             <div className="total-voters-card">
               <h3>कुल मतदार</h3>
-              <p className="total-count">{(totalCount || voters.length).toLocaleString()}</p>
+              <p className="total-count">95645</p>
             </div>
           </div>
         )}
