@@ -934,8 +934,6 @@ function App() {
     let filtered = [];
     if (activeFilter === 'booth' && filterValue) {
       filtered = filterByBooth(filterValue);
-    } else if (activeFilter === 'surname' && filterValue) {
-      filtered = filterBySurname(filterValue);
     } else if (activeFilter === 'address' && filterValue) {
       filtered = filterByAddress(filterValue);
     }
@@ -943,7 +941,7 @@ function App() {
     // Remove duplicates from filtered results
     const uniqueFiltered = removeDuplicates(filtered);
     setFilteredList(uniqueFiltered);
-  }, [activeFilter, filterValue, filterByBooth, filterBySurname, filterByAddress]);
+  }, [activeFilter, filterValue, filterByBooth, filterByAddress]);
 
   // Get unique values for dropdowns
   const uniqueBooths = useMemo(() => {
@@ -979,16 +977,11 @@ function App() {
   return (
     <div className="App">
       <header>
-        <div className="header-logo">
-          <img 
-            src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQzDf20rC8TTLymP0n0Y762Hhj3Ws8g1oecGg&s" 
-            alt="Logo" 
-            className="header-image"
-          />
-        </div>
         <h1>प्रभाग क्रमांक 8</h1>
-        <h2>मतदार शोध प्रणाली</h2>
-        <h3>पुणे महानगरपालिका</h3>
+        <h2>रामदास गोपीनाथ वाळके (नाना)</h2>
+        <h3>मतदार शोध प्रणाली</h3>
+        <h4>पुणे महानगरपालिका</h4>
+        <h5>निवडणूक 2025</h5>
       </header>
 
       <div className="container">
@@ -1012,17 +1005,7 @@ function App() {
               setFilteredList([]);
             }}
           >
-            🏛️ बूथ वार
-          </button>
-          <button 
-            className={`filter-tab ${activeFilter === 'surname' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveFilter('surname');
-              setFilterValue('');
-              setFilteredList([]);
-            }}
-          >
-            👤 उपनाव वार
+            🏛️ बूथ प्रमाणे
           </button>
           <button 
             className={`filter-tab ${activeFilter === 'address' ? 'active' : ''}`}
@@ -1032,7 +1015,7 @@ function App() {
               setFilteredList([]);
             }}
           >
-            📍 पत्ता वार
+            📍 पत्ता प्रमाणे
           </button>
         </div>
 
@@ -1194,28 +1177,6 @@ function App() {
           </div>
         )}
 
-        {/* Surname Filter Section */}
-        {activeFilter === 'surname' && (
-          <div className="filter-section">
-            <div className="filter-input-container">
-              <label>उपनाव टाइप करा:</label>
-              <input
-                type="text"
-                className="filter-input"
-                placeholder="उपनाव टाइप करा..."
-                value={filterValue}
-                onChange={(e) => setFilterValue(e.target.value)}
-                list="surname-list"
-              />
-              <datalist id="surname-list">
-                {uniqueSurnames.slice(0, 100).map((surname, idx) => (
-                  <option key={idx} value={surname} />
-                ))}
-              </datalist>
-            </div>
-          </div>
-        )}
-
         {/* Address Filter Section */}
         {activeFilter === 'address' && (
           <div className="filter-section">
@@ -1237,9 +1198,8 @@ function App() {
           <div className="filtered-results-section">
             <div className="results-header">
               <h3>
-                {activeFilter === 'booth' && '🏛️ बूथ वार मतदार'}
-                {activeFilter === 'surname' && '👤 उपनाव वार मतदार'}
-                {activeFilter === 'address' && '📍 पत्ता वार मतदार'}
+                {activeFilter === 'booth' && '🏛️ बूथ प्रमाणे मतदार'}
+                {activeFilter === 'address' && '📍 पत्ता प्रमाणे मतदार'}
               </h3>
               <span className="results-count">{filteredList.length} मतदार सापडले</span>
             </div>
