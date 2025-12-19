@@ -387,7 +387,7 @@ function App() {
       }
       console.log(`✅ Cached successfully`);
       setError(null);
-      setLoading(false);
+        setLoading(false);
       setIsRetrying(false);
       
       } catch (err) {
@@ -609,25 +609,37 @@ function App() {
     };
   }, [searchMode]);
   
-  // Optimized client-side search - now searches ALL cached voters
+  // Ultra-fast client-side search with early termination
   const performClientSearch = useMemo(() => {
     return (query, votersList) => {
-      if (!query || query.trim().length < 2 || votersList.length === 0) {
+      if (!query || query.trim().length < 1 || votersList.length === 0) {
         return [];
       }
       
       const q = query.toLowerCase().trim();
-    const results = [];
-      const maxResults = 5000; // Increased limit since we have all voters cached
+      const results = [];
+      const maxResults = 1000; // Limit for instant results
       
-      // Search through ALL voters (no limit since they're cached)
+      // Fast search with early exact match detection
       for (let i = 0; i < votersList.length && results.length < maxResults; i++) {
-        if (searchVoter(votersList[i], q)) {
-          results.push(votersList[i]);
+        const voter = votersList[i];
+        
+        // Quick exact match check first (fastest)
+        const epicNo = (voter.voterIdCard || voter.EPIC_NO || '').toLowerCase();
+        const mobile = (voter.mobileNumber || '').toLowerCase();
+        
+        if (epicNo === q || mobile === q) {
+          results.push(voter);
+          continue;
+        }
+        
+        // Then check if matches search criteria
+        if (searchVoter(voter, q)) {
+          results.push(voter);
+        }
       }
-    }
     
-    return results;
+      return results;
     };
   }, [searchVoter]);
 
@@ -651,138 +663,116 @@ function App() {
       }
     }
     
-    if (query.length < 2) {
+    if (query.length < 1) {
       setFilteredVoters([]);
       setIsSearching(false);
       return;
     }
 
-    // Check cache first
+    // Check cache first - instant results
     if (searchCache.has(query)) {
       setFilteredVoters(searchCache.get(query));
       setIsSearching(false);
       return;
     }
 
+    // Very short debounce for instant feel (50ms for instant, 100ms max)
+    const debounceTime = query.length <= 2 ? 50 : query.length <= 4 ? 80 : 100;
+    
     setIsSearching(true);
     
-    // Smart debounce: shorter for short queries, longer for longer queries
-    const debounceTime = query.length <= 3 ? 300 : query.length <= 6 ? 500 : 700;
-    
-    const searchTimeout = setTimeout(async () => {
-      try {
-        // 1) हमेशा सबसे पहले client-side search (fast, responsive)
-        if (voters.length > 0) {
-          console.log(`Using client-side search on ${voters.length} voters`);
-          const localResults = performClientSearch(query, voters);
-
-          // Remove duplicates from local search results
-          const uniqueLocalResults = removeDuplicates(localResults);
-          
-          // Set filtered voters with unique results
-          setFilteredVoters(uniqueLocalResults);
-          
-          // Cache client search results (only unique)
-          setSearchCache(prev => {
-            const newCache = new Map(prev);
-            newCache.set(query, uniqueLocalResults);
-            if (newCache.size > 50) {
-              const firstKey = newCache.keys().next().value;
-              newCache.delete(firstKey);
-            }
-            return newCache;
-          });
-
-          // Name / All mode में या local results मिले तो यहीं रुक जाओ (कोई API call नहीं)
-          if (searchMode === 'name' || searchMode === 'all' || uniqueLocalResults.length > 0) {
-            setIsSearching(false);
-            return;
-          }
-          // EPIC / Mobile mode में और अभी भी 0 result हैं तो ही API fallback करो
-        }
-
-        // 2) EPIC / Mobile mode के लिए API search (जब local से कुछ नहीं मिला)
-        const cleanQuery = query.trim().replace(/[,\s]+/g, ' ').trim();
-        console.log('Using API search for:', cleanQuery);
+    const searchTimeout = setTimeout(() => {
+      // Instant client-side search (synchronous for speed)
+      if (voters.length > 0) {
+        const localResults = performClientSearch(query, voters);
+        const uniqueLocalResults = removeDuplicates(localResults);
         
-        const response = await axios.get(`${API_BASE_URL}/search`, {
-          params: { query: cleanQuery },
-          timeout: 30000,
-          headers: { 'Accept': 'application/json' }
-        });
+        // Set results immediately
+        setFilteredVoters(uniqueLocalResults);
+        setIsSearching(false);
         
-        console.log('Search API Response:', response.data);
-
-        const result = response.data;
-        let searchResults = [];
-        
-        if (result.success && Array.isArray(result.data)) {
-          searchResults = result.data;
-        } else if (Array.isArray(result)) {
-          searchResults = result;
-        } else if (result.data && Array.isArray(result.data)) {
-          searchResults = result.data;
-        } else if (result.voters && Array.isArray(result.voters)) {
-          searchResults = result.voters;
-        } else if (result.results && Array.isArray(result.results)) {
-          searchResults = result.results;
-        }
-
-        console.log(`Found ${searchResults.length} results for query: ${cleanQuery}`);
-        
-        // If no results and query looks like EPIC number, try exact match
-        if (searchResults.length === 0 && /^[A-Z0-9]{8,12}$/i.test(cleanQuery)) {
-          console.log('Query looks like EPIC number, trying exact match...');
-          // Try searching with exact EPIC format
-          try {
-            const exactResponse = await axios.get(`${API_BASE_URL}/search`, {
-              params: { query: cleanQuery.toUpperCase() },
-              timeout: 30000,
-              headers: { 'Accept': 'application/json' }
-            });
-            
-            const exactResult = exactResponse.data;
-            if (exactResult.success && Array.isArray(exactResult.data)) {
-              searchResults = exactResult.data;
-            } else if (Array.isArray(exactResult)) {
-              searchResults = exactResult;
-            } else if (exactResult.data && Array.isArray(exactResult.data)) {
-              searchResults = exactResult.data;
-            }
-            console.log(`Exact match found ${searchResults.length} results`);
-          } catch (exactErr) {
-            console.warn('Exact match search failed:', exactErr);
-          }
-        }
-
-        // Remove duplicates from search results
-        const uniqueSearchResults = removeDuplicates(searchResults);
-        setFilteredVoters(uniqueSearchResults);
-        
-        // Cache API results (only unique)
+        // Cache results
         setSearchCache(prev => {
           const newCache = new Map(prev);
-          newCache.set(query, uniqueSearchResults);
-          if (newCache.size > 50) {
+          newCache.set(query, uniqueLocalResults);
+          if (newCache.size > 100) {
             const firstKey = newCache.keys().next().value;
             newCache.delete(firstKey);
           }
           return newCache;
         });
-        
-        setIsSearching(false);
-      } catch (err) {
-        console.error('Error searching voters:', err);
-        // Fallback to client-side search if API fails (only searches loaded voters)
-        if (voters.length > 0) {
-          console.log('API search failed, using client-side search for loaded voters only');
-          const results = performClientSearch(query, voters);
-          const uniqueResults = removeDuplicates(results);
-          setFilteredVoters(uniqueResults);
-        } else {
-          setFilteredVoters([]);
+
+        // For name/all mode or if results found, stop here (no API call)
+        if (searchMode === 'name' || searchMode === 'all' || uniqueLocalResults.length > 0) {
+          return;
         }
-        setIsSearching(false);
+      }
+      
+      // Only use API for EPIC/Mobile mode when no local results (background, non-blocking)
+      if (searchMode === 'epic' || searchMode === 'mobile') {
+        const cleanQuery = query.trim().replace(/[,\s]+/g, ' ').trim();
+        
+        axios.get(`${API_BASE_URL}/search`, {
+          params: { query: cleanQuery },
+          timeout: 15000,
+          headers: { 'Accept': 'application/json' }
+        }).then(response => {
+          const result = response.data;
+          let searchResults = [];
+          
+          if (result.success && Array.isArray(result.data)) {
+            searchResults = result.data;
+          } else if (Array.isArray(result)) {
+            searchResults = result;
+          } else if (result.data && Array.isArray(result.data)) {
+            searchResults = result.data;
+          } else if (result.voters && Array.isArray(result.voters)) {
+            searchResults = result.voters;
+          } else if (result.results && Array.isArray(result.results)) {
+            searchResults = result.results;
+          }
+          
+          // If no results and query looks like EPIC number, try exact match
+          if (searchResults.length === 0 && /^[A-Z0-9]{8,12}$/i.test(cleanQuery)) {
+            return axios.get(`${API_BASE_URL}/search`, {
+              params: { query: cleanQuery.toUpperCase() },
+              timeout: 15000,
+              headers: { 'Accept': 'application/json' }
+            }).then(exactResponse => {
+              const exactResult = exactResponse.data;
+              if (exactResult.success && Array.isArray(exactResult.data)) {
+                return exactResult.data;
+              } else if (Array.isArray(exactResult)) {
+                return exactResult;
+              } else if (exactResult.data && Array.isArray(exactResult.data)) {
+                return exactResult.data;
+              }
+              return [];
+            }).catch(() => []);
+          }
+          
+          return searchResults;
+        }).then(searchResults => {
+          if (searchResults && searchResults.length > 0) {
+            const uniqueSearchResults = removeDuplicates(searchResults);
+            setFilteredVoters(uniqueSearchResults);
+            
+            // Cache API results
+            setSearchCache(prev => {
+              const newCache = new Map(prev);
+              newCache.set(query, uniqueSearchResults);
+              if (newCache.size > 100) {
+                const firstKey = newCache.keys().next().value;
+                newCache.delete(firstKey);
+              }
+              return newCache;
+            });
+          }
+          setIsSearching(false);
+        }).catch(err => {
+          console.error('Error searching voters:', err);
+          setIsSearching(false);
+        });
       }
     }, debounceTime);
 
@@ -989,6 +979,13 @@ function App() {
   return (
     <div className="App">
       <header>
+        <div className="header-logo">
+          <img 
+            src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQzDf20rC8TTLymP0n0Y762Hhj3Ws8g1oecGg&s" 
+            alt="Logo" 
+            className="header-image"
+          />
+        </div>
         <h1>प्रभाग क्रमांक 8</h1>
         <h2>मतदार शोध प्रणाली</h2>
         <h3>पुणे महानगरपालिका</h3>
@@ -1246,7 +1243,7 @@ function App() {
               </h3>
               <span className="results-count">{filteredList.length} मतदार सापडले</span>
             </div>
-              <div className="voter-cards-grid">
+            <div className="voter-cards-grid">
               {filteredList.map((voter, index) => {
                 const nameEn = (voter.name || voter.FM_NAME_EN || '').trim();
                 const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').trim();

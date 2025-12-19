@@ -176,6 +176,47 @@ header h3 {
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
 }
 
+.header-logo {
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.header-image {
+  max-width: 150px;
+  max-height: 150px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 0;
+  box-shadow: 
+    0 10px 40px rgba(0, 0, 0, 0.3),
+    0 5px 20px rgba(0, 0, 0, 0.2),
+    inset 0 2px 10px rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.15);
+  padding: 10px;
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  transition: all 0.3s ease;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.25));
+}
+
+.header-image:hover {
+  transform: scale(1.05);
+  box-shadow: 
+    0 15px 50px rgba(0, 0, 0, 0.4),
+    0 8px 25px rgba(0, 0, 0, 0.3),
+    inset 0 2px 10px rgba(255, 255, 255, 0.5);
+  border-color: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(25px) saturate(180%);
+  -webkit-backdrop-filter: blur(25px) saturate(180%);
+}
+
 .container {
   max-width: 1200px;
   margin: 0 auto;
@@ -1578,6 +1619,20 @@ header h3 {
     border-radius: 15px;
   }
 
+  .header-logo {
+    top: 12px;
+    right: 15px;
+  }
+
+  .header-image {
+    max-width: 120px;
+    max-height: 120px;
+    padding: 8px;
+    border-radius: 0;
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+  }
+
   header h1 {
     font-size: 20px;
     margin-bottom: 8px;
@@ -1981,6 +2036,20 @@ header h3 {
 
   header {
     padding: 15px 8px;
+  }
+
+  .header-logo {
+    top: 10px;
+    right: 10px;
+  }
+
+  .header-image {
+    max-width: 100px;
+    max-height: 100px;
+    padding: 6px;
+    border-radius: 0;
+    backdrop-filter: blur(15px) saturate(150%);
+    -webkit-backdrop-filter: blur(15px) saturate(150%);
   }
 
   header h1 {
