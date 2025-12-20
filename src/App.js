@@ -567,13 +567,17 @@ function App() {
     const q = query.toLowerCase().trim();
     if (q.length === 0) return false;
     
-      // Pre-compute searchable fields once
-      const nameEn = (voter.name || voter.FM_NAME_EN || '').toLowerCase();
-      const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').toLowerCase();
-      const lastNameEn = (voter.LASTNAME_EN || '').toLowerCase();
-      const lastNameMr = (voter.LASTNAME_V1 || '').toLowerCase();
-      const epicNo = (voter.voterIdCard || voter.EPIC_NO || '').toLowerCase();
-      const mobile = (voter.mobileNumber || '').toLowerCase();
+      // Pre-compute searchable fields once - check all possible name fields
+      // Normalize all fields to lowercase for case-insensitive search
+      const nameEn = (voter.name || voter.FM_NAME_EN || '').toLowerCase().trim();
+      const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').toLowerCase().trim();
+      const lastNameEn = (voter.LASTNAME_EN || voter.lastName || '').toLowerCase().trim();
+      const lastNameMr = (voter.LASTNAME_V1 || voter.lastName_mr || '').toLowerCase().trim();
+      const epicNo = (voter.voterIdCard || voter.EPIC_NO || '').toLowerCase().trim();
+      const mobile = (voter.mobileNumber || voter.mobile || '').toLowerCase().trim();
+      
+      // Combine all name fields for comprehensive search (catches "walake", "junavane", etc.)
+      const allNameText = `${nameEn} ${nameMr} ${lastNameEn} ${lastNameMr}`.toLowerCase().trim();
       
       // Mode-specific search
       if (searchMode === 'epic') {
@@ -585,11 +589,21 @@ function App() {
       }
       
       if (searchMode === 'name') {
+        // For name search, require minimum 2 characters
+        if (q.length < 2) return false;
+        
+        // Simple and reliable matching - check all name fields and combinations
+        // This ensures "walake" and similar surnames are found
         return (
           nameEn.includes(q) ||
           nameMr.includes(q) ||
           lastNameEn.includes(q) ||
-          lastNameMr.includes(q)
+          lastNameMr.includes(q) ||
+          // Check full name combinations
+          `${nameEn} ${lastNameEn}`.trim().includes(q) ||
+          `${nameMr} ${lastNameMr}`.trim().includes(q) ||
+          // Check in all name text (catches any occurrence)
+          allNameText.includes(q)
         );
       }
       
@@ -597,12 +611,19 @@ function App() {
       // Fast exact match checks first
       if (epicNo === q || mobile === q) return true;
       
-      // Then substring matches
+      // Simple and reliable name matching - ensures all matches are found
+      const fullNameEn = `${nameEn} ${lastNameEn}`.trim();
+      const fullNameMr = `${nameMr} ${lastNameMr}`.trim();
+      
+      // Check all name fields and combinations (including allNameText for comprehensive search)
       return (
         nameEn.includes(q) ||
         nameMr.includes(q) ||
         lastNameEn.includes(q) ||
         lastNameMr.includes(q) ||
+        fullNameEn.includes(q) ||
+        fullNameMr.includes(q) ||
+        allNameText.includes(q) ||
         epicNo.includes(q) ||
         mobile.includes(q)
       );
@@ -663,11 +684,15 @@ function App() {
       }
     }
     
+    // Minimum query length - allow single character for better search
     if (query.length < 1) {
       setFilteredVoters([]);
       setIsSearching(false);
       return;
     }
+    
+    // Normalize query - remove extra spaces and ensure lowercase
+    query = query.toLowerCase().trim().replace(/\s+/g, ' ');
 
     // Check cache first - instant results
     if (searchCache.has(query)) {
@@ -782,22 +807,25 @@ function App() {
     };
   }, [searchQuery, voters, searchMode, performClientSearch, searchCache, totalCount]);
 
-  // Get display voters - all voters or search results
+  // Get display voters - all voters or search results (limit to top 100 for performance)
   const getDisplayVoters = () => {
     if (searchQuery && searchQuery.trim()) {
-      return filteredVoters;
+      // For common surnames, show top 100 most relevant results
+      // User can refine search to get more specific results
+      return filteredVoters.slice(0, 100);
     }
     return voters;
   };
 
   const displayVoters = getDisplayVoters();
 
-  // Optimized suggestions - top 10 matches with relevance ranking
+  // Optimized suggestions - top 20 matches with improved relevance ranking
   const suggestions = useMemo(() => {
     if (!searchQuery || !searchQuery.trim() || filteredVoters.length === 0) return [];
     
     const query = searchQuery.toLowerCase().trim();
-    const results = filteredVoters.slice(0, 100); // Check more for better ranking
+    const queryWords = query.split(/\s+/).filter(w => w.length > 0);
+    const results = filteredVoters.slice(0, 200); // Check more voters for better ranking
     
     // Sort by relevance: exact matches first, then by field priority
     const ranked = results.map(voter => {
@@ -806,19 +834,46 @@ function App() {
       const mobile = (voter.mobileNumber || '').toLowerCase();
       const nameEn = (voter.name || voter.FM_NAME_EN || '').toLowerCase();
       const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').toLowerCase();
+      const lastNameEn = (voter.LASTNAME_EN || '').toLowerCase();
+      const lastNameMr = (voter.LASTNAME_V1 || '').toLowerCase();
+      const fullNameEn = `${nameEn} ${lastNameEn}`.trim();
+      const fullNameMr = `${nameMr} ${lastNameMr}`.trim();
       
       // Exact matches get highest score
-      if (epicNo === query || mobile === query) score += 100;
-      else if (epicNo.startsWith(query) || mobile.startsWith(query)) score += 50;
-      else if (epicNo.includes(query) || mobile.includes(query)) score += 25;
+      if (epicNo === query || mobile === query) score += 200;
+      else if (epicNo.startsWith(query) || mobile.startsWith(query)) score += 100;
+      else if (epicNo.includes(query) || mobile.includes(query)) score += 50;
       
-      // Name matches
-      if (nameEn.startsWith(query) || nameMr.startsWith(query)) score += 30;
-      else if (nameEn.includes(query) || nameMr.includes(query)) score += 15;
+      // Full name exact match
+      if (fullNameEn === query || fullNameMr === query) score += 150;
+      else if (fullNameEn.startsWith(query) || fullNameMr.startsWith(query)) score += 80;
+      else if (fullNameEn.includes(query) || fullNameMr.includes(query)) score += 40;
+      
+      // Last name matches (highest priority for surname searches)
+      if (lastNameEn === query || lastNameMr === query) score += 120;
+      else if (lastNameEn.startsWith(query) || lastNameMr.startsWith(query)) score += 90;
+      else if (lastNameEn.includes(query) || lastNameMr.includes(query)) score += 50;
+      
+      // First name matches (lower priority than last name)
+      if (nameEn.startsWith(query) || nameMr.startsWith(query)) score += 40;
+      else if (nameEn.includes(query) || nameMr.includes(query)) score += 20;
+      
+      // Word-by-word matching for better partial name search
+      if (queryWords.length > 1) {
+        queryWords.forEach(word => {
+          // Last name word matches get higher priority
+          if (lastNameEn.startsWith(word) || lastNameMr.startsWith(word)) score += 25;
+          else if (lastNameEn.includes(word) || lastNameMr.includes(word)) score += 15;
+          // First name word matches
+          if (nameEn.startsWith(word) || nameMr.startsWith(word)) score += 15;
+          else if (nameEn.includes(word) || nameMr.includes(word)) score += 8;
+        });
+      }
       
       return { voter, score };
-    }).sort((a, b) => b.score - a.score)
-      .slice(0, 10)
+    }).filter(item => item.score > 0) // Only include items with some match
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 20) // Show top 20 suggestions
       .map(item => item.voter);
     
     return ranked;
@@ -829,7 +884,12 @@ function App() {
     const value = e.target.value;
     setSearchQuery(value);
     const hasValue = value.trim().length > 0;
-    setShowSuggestions(hasValue && filteredVoters.length > 0);
+    // Show suggestions when typing, hide when empty
+    if (hasValue && filteredVoters.length > 0) {
+      setShowSuggestions(true);
+    } else if (!hasValue) {
+      setShowSuggestions(false);
+    }
   };
   
   // Handle keyboard navigation in search
@@ -839,6 +899,9 @@ function App() {
       setShowSuggestions(false);
       e.target.blur();
     } else if (e.key === 'Enter') {
+      // Hide suggestions when Enter is pressed
+      setShowSuggestions(false);
+      
       // If suggestions are visible, open first suggestion
       if (suggestions.length > 0) {
         handleSuggestionClick(suggestions[0]);
@@ -981,7 +1044,7 @@ function App() {
         <h2>रामदास गोपीनाथ वाळके (नाना)</h2>
         <h3>मतदार शोध प्रणाली</h3>
         <h4>पुणे महानगरपालिका</h4>
-        <h5>निवडणूक 2025</h5>
+        <h5>Corporation Election 2026</h5>
       </header>
 
       <div className="container">
@@ -1047,7 +1110,7 @@ function App() {
                   className={`search-mode-chip ${searchMode === 'epic' ? 'active' : ''}`}
                   onClick={() => setSearchMode('epic')}
                 >
-                  EPIC
+                  मतदान कार्ड
                 </button>
                 <button
                   type="button"
@@ -1076,7 +1139,10 @@ function App() {
                   if (filteredVoters.length > 0) setShowSuggestions(true);
                 }}
                 onBlur={() => {
-                  setTimeout(() => setShowSuggestions(false), 200);
+                  // Hide suggestions after a delay to allow clicks
+                  setTimeout(() => {
+                    setShowSuggestions(false);
+                  }, 300);
                 }}
                 autoComplete="off"
                 spellCheck="false"
@@ -1090,7 +1156,7 @@ function App() {
                 <div
                   className="clear-icon"
                   onClick={handleClearSearch}
-                  title="Clear search"
+                  title="शोध साफ करा"
                 >
                   <FaTimes />
                 </div>
@@ -1101,7 +1167,7 @@ function App() {
             {showSuggestions && suggestions.length > 0 && (
               <div className="suggestions-container">
                 <div className="suggestions-header">
-                  <span>{suggestions.length} सुझाव</span>
+                  <span>{suggestions.length} परिणाम</span>
                 </div>
                 <div className="suggestions-list">
                   {suggestions.map((voter, index) => {
@@ -1121,7 +1187,7 @@ function App() {
                       fullNameMr = `${nameMr} ${lastNameMr}`.trim();
                     }
                     
-                    const displayName = fullNameMr || fullNameEn || nameEn || nameMr || 'N/A';
+                    const displayName = fullNameMr || fullNameEn || nameEn || nameMr || '-';
 
                     return (
                       <div
@@ -1133,12 +1199,12 @@ function App() {
                           <div className="suggestion-name-new">{displayName}</div>
                           {voter.voterIdCard || voter.EPIC_NO ? (
                             <div className="suggestion-id-new">
-                              <span className="id-label">ID:</span> {voter.voterIdCard || voter.EPIC_NO}
+                              <span className="id-label">मतदान कार्ड क्र.:</span> {voter.voterIdCard || voter.EPIC_NO}
                             </div>
                           ) : null}
                           {voter.mobileNumber && (
                             <div className="suggestion-mobile">
-                              <span className="mobile-label">Mobile:</span> {voter.mobileNumber}
+                              <span className="mobile-label">मोबाईल:</span> {voter.mobileNumber}
                             </div>
                           )}
                         </div>
@@ -1323,12 +1389,24 @@ function App() {
           </div>
         )}
 
-        {/* Results - Only show when suggestions are hidden and results are few */}
-        {!loading && !error && voters.length > 0 && searchQuery && searchQuery.trim() && !showSuggestions && displayVoters.length > 0 && displayVoters.length <= 10 && (
+        {/* Results - Show when suggestions are hidden and search has results */}
+        {!loading && !error && voters.length > 0 && searchQuery && searchQuery.trim() && !showSuggestions && displayVoters.length > 0 && (
           <div className="results-section">
                 <div className="search-info">
               <span>
-                {displayVoters.length} परिणाम सापडले
+                {filteredVoters.length > 100 ? (
+                  <>
+                    <strong>100</strong> परिणाम दाखवले (एकूण <strong>{filteredVoters.length.toLocaleString()}</strong> परिणाम सापडले) "{searchQuery}"
+                    <br />
+                    <small style={{color: '#666', fontSize: '0.9em'}}>
+                      💡 अधिक नेमके परिणामांसाठी पूर्ण नाव किंवा मतदान कार्ड क्र. टाइप करा
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <strong>{displayVoters.length.toLocaleString()}</strong> परिणाम सापडले "{searchQuery}"
+                  </>
+                )}
               </span>
                 </div>
 
@@ -1371,7 +1449,7 @@ function App() {
                     <div key={`${voter._id || 'mobile'}-${index}`} className="voter-card-mobile">
                       <div className="voter-card-mobile-header">
                         <div className="voter-card-mobile-name">
-                          {voter.name_mr || voter.FM_NAME_V1 || voter.name || voter.FM_NAME_EN || 'N/A'}
+                          {voter.name_mr || voter.FM_NAME_V1 || voter.name || voter.FM_NAME_EN || '-'}
                         </div>
                         {(voter.name || voter.FM_NAME_EN) && (voter.name_mr || voter.FM_NAME_V1) && (
                           <div className="voter-card-mobile-name-en">
@@ -1409,7 +1487,7 @@ function App() {
         {!loading && !error && voters.length > 0 && searchQuery && searchQuery.trim() && !showSuggestions && displayVoters.length > 10 && (
           <div className="search-hint-message">
             <p>कृपया शोध पट्टीमध्ये टाइप करून विशिष्ट मतदार शोधा</p>
-            <p className="hint-small">किंवा सुझाव ड्रॉपडाउनमधून निवडा</p>
+            <p className="hint-small">किंवा परिणाम ड्रॉपडाउनमधून निवडा</p>
           </div>
         )}
       </div>
@@ -1465,7 +1543,7 @@ function App() {
                     {selectedVoter.voterIdCard || selectedVoter.EPIC_NO || '-'}
                   </div>
                   <div>
-                    <strong>EPIC NO:</strong> {selectedVoter.EPIC_NO || '-'}
+                    <strong>EPIC क्र.:</strong> {selectedVoter.EPIC_NO || '-'}
                   </div>
                   <div>
                     <strong>विधानसभा:</strong> {selectedVoter.AC_NO || '-'}
