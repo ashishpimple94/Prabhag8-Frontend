@@ -1078,7 +1078,7 @@ function App() {
               setFilteredList([]);
             }}
           >
-            📍 पत्ता प्रमाणे
+            📍 पत्त्याप्रमाणे
           </button>
         </div>
 
@@ -1265,7 +1265,7 @@ function App() {
             <div className="results-header">
               <h3>
                 {activeFilter === 'booth' && '🏛️ बूथ प्रमाणे मतदार'}
-                {activeFilter === 'address' && '📍 पत्ता प्रमाणे मतदार'}
+                {activeFilter === 'address' && '📍 पत्त्याप्रमाणे मतदार'}
               </h3>
               <span className="results-count">{filteredList.length} मतदार सापडले</span>
             </div>
