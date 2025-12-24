@@ -5,6 +5,90 @@ import { FaSearch, FaTimes, FaEye, FaSpinner, FaRedo, FaWhatsapp } from 'react-i
 
 const API_BASE_URL = 'https://prabhag8-backend-1.onrender.com/api/voters';
 
+// Fuzzy search algorithm - Levenshtein distance for spelling mistakes
+const levenshteinDistance = (str1, str2) => {
+  const m = str1.length;
+  const n = str2.length;
+  const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (str1[i - 1] === str2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,     // deletion
+          dp[i][j - 1] + 1,     // insertion
+          dp[i - 1][j - 1] + 1  // substitution
+        );
+      }
+    }
+  }
+  
+  return dp[m][n];
+};
+
+// Calculate similarity score (0-1, higher is better)
+const calculateSimilarity = (str1, str2) => {
+  if (!str1 || !str2) return 0;
+  const maxLen = Math.max(str1.length, str2.length);
+  if (maxLen === 0) return 1;
+  const distance = levenshteinDistance(str1.toLowerCase(), str2.toLowerCase());
+  return 1 - (distance / maxLen);
+};
+
+// Check if query matches with fuzzy search (tolerance for spelling mistakes)
+const fuzzyMatch = (text, query, threshold = 0.7) => {
+  if (!text || !query) return false;
+  
+  const textLower = text.toLowerCase();
+  const queryLower = query.toLowerCase();
+  
+  // Exact match
+  if (textLower.includes(queryLower)) return true;
+  
+  // Check word-by-word fuzzy matching
+  const queryWords = queryLower.split(/\s+/).filter(w => w.length > 0);
+  const textWords = textLower.split(/\s+/).filter(w => w.length > 0);
+  
+  // If query is a single word, check against each word in text
+  if (queryWords.length === 1) {
+    const queryWord = queryWords[0];
+    for (const textWord of textWords) {
+      if (textWord.includes(queryWord)) return true;
+      if (textWord.length >= 3 && queryWord.length >= 3) {
+        const similarity = calculateSimilarity(textWord, queryWord);
+        if (similarity >= threshold) return true;
+      }
+    }
+  } else {
+    // Multi-word query: check if all words match (fuzzy)
+    let matchedWords = 0;
+    for (const queryWord of queryWords) {
+      for (const textWord of textWords) {
+        if (textWord.includes(queryWord)) {
+          matchedWords++;
+          break;
+        }
+        if (textWord.length >= 3 && queryWord.length >= 3) {
+          const similarity = calculateSimilarity(textWord, queryWord);
+          if (similarity >= threshold) {
+            matchedWords++;
+            break;
+          }
+        }
+      }
+    }
+    // If at least 70% of words match, consider it a match
+    return matchedWords >= Math.ceil(queryWords.length * 0.7);
+  }
+  
+  return false;
+};
+
 // Helper function to remove duplicate voters
 const removeDuplicates = (voters) => {
   if (!Array.isArray(voters) || voters.length === 0) return voters;
@@ -12,34 +96,64 @@ const removeDuplicates = (voters) => {
   const seen = new Map();
   const uniqueVoters = [];
   let duplicatesRemoved = 0;
+  let votersWithoutId = 0;
+  const epicCounts = new Map();
   
-  for (const voter of voters) {
-    // Use _id as primary key, fallback to EPIC_NO, then combination of fields
+  for (let i = 0; i < voters.length; i++) {
+    const voter = voters[i];
+    // Use _id as PRIMARY key - this is the most reliable way
+    // Only remove duplicates if they have the same _id
     let uniqueKey = null;
     
     if (voter._id) {
+      // Primary: Use _id (MongoDB ObjectId or unique identifier)
       uniqueKey = `_id_${voter._id}`;
-    } else if (voter.voterIdCard || voter.EPIC_NO) {
-      uniqueKey = `epic_${voter.voterIdCard || voter.EPIC_NO}`;
     } else {
-      // Fallback: use combination of name + mobile + AC_NO + PART_NO
+      // If no _id, preserve all entries by using index
+      votersWithoutId++;
+      const epic = (voter.voterIdCard || voter.EPIC_NO || '').trim();
       const name = (voter.name || voter.FM_NAME_EN || '').toLowerCase().trim();
       const mobile = (voter.mobileNumber || '').trim();
       const acNo = (voter.AC_NO || '').trim();
       const partNo = (voter.PART_NO || '').trim();
-      uniqueKey = `combo_${name}_${mobile}_${acNo}_${partNo}`;
+      
+      // Create unique key with index to preserve all entries without _id
+      uniqueKey = `no_id_${i}_${epic}_${name}_${mobile}_${acNo}_${partNo}`;
+      
+      // Track EPIC numbers for logging
+      if (epic) {
+        epicCounts.set(epic, (epicCounts.get(epic) || 0) + 1);
+      }
     }
     
     if (uniqueKey && !seen.has(uniqueKey)) {
       seen.set(uniqueKey, true);
       uniqueVoters.push(voter);
-    } else if (uniqueKey) {
+    } else if (uniqueKey && voter._id) {
+      // Only count as duplicate if it has _id and we've seen this _id before
       duplicatesRemoved++;
+      console.warn(`⚠️ Duplicate _id found: ${voter._id}`);
     }
   }
   
   if (duplicatesRemoved > 0) {
-    console.log(`🔄 Removed ${duplicatesRemoved} duplicate voters. Unique voters: ${uniqueVoters.length}`);
+    console.log(`🔄 Removed ${duplicatesRemoved} duplicate voters (same _id). Unique voters: ${uniqueVoters.length}`);
+  }
+  
+  if (votersWithoutId > 0) {
+    console.log(`ℹ️ Found ${votersWithoutId} voters without _id (all preserved)`);
+  }
+  
+  // Count EPIC numbers that appear more than once
+  let duplicateEpics = 0;
+  epicCounts.forEach((count, epic) => {
+    if (count > 1) {
+      duplicateEpics += count - 1; // Count how many extra entries
+    }
+  });
+  
+  if (duplicateEpics > 0) {
+    console.log(`⚠️ Warning: Found ${duplicateEpics} voters with duplicate EPIC numbers (might be data issue or legitimate duplicates)`);
   }
   
   return uniqueVoters;
@@ -63,6 +177,7 @@ function App() {
   const [activeFilter, setActiveFilter] = useState('search'); // 'search', 'booth', 'surname', 'address'
   const [filterValue, setFilterValue] = useState(''); // For booth/surname/address filter
   const [filteredList, setFilteredList] = useState([]); // Filtered results for tabs
+  const [showAddressSuggestions, setShowAddressSuggestions] = useState(false); // For address autocomplete
 
   // Check cache first, then load all voters with smart caching
   const loadVotersFromCache = () => {
@@ -592,17 +707,14 @@ function App() {
         // For name search, require minimum 2 characters
         if (q.length < 2) return false;
         
-        // Simple and reliable matching - check all name fields and combinations
-        // This ensures "walake" and similar surnames are found
+        // Fast exact matches only - no fuzzy in searchVoter for performance
         return (
           nameEn.includes(q) ||
           nameMr.includes(q) ||
           lastNameEn.includes(q) ||
           lastNameMr.includes(q) ||
-          // Check full name combinations
           `${nameEn} ${lastNameEn}`.trim().includes(q) ||
           `${nameMr} ${lastNameMr}`.trim().includes(q) ||
-          // Check in all name text (catches any occurrence)
           allNameText.includes(q)
         );
       }
@@ -615,8 +727,8 @@ function App() {
       const fullNameEn = `${nameEn} ${lastNameEn}`.trim();
       const fullNameMr = `${nameMr} ${lastNameMr}`.trim();
       
-      // Check all name fields and combinations (including allNameText for comprehensive search)
-      return (
+      // Exact name matches
+      const exactNameMatch = (
         nameEn.includes(q) ||
         nameMr.includes(q) ||
         lastNameEn.includes(q) ||
@@ -627,10 +739,13 @@ function App() {
         epicNo.includes(q) ||
         mobile.includes(q)
       );
+      
+      // Return exact matches only - fuzzy is handled in performClientSearch
+      return exactNameMatch;
     };
   }, [searchMode]);
   
-  // Ultra-fast client-side search with early termination
+  // Ultra-fast client-side search with early termination and performance optimization
   const performClientSearch = useMemo(() => {
     return (query, votersList) => {
       if (!query || query.trim().length < 1 || votersList.length === 0) {
@@ -638,8 +753,12 @@ function App() {
       }
       
       const q = query.toLowerCase().trim();
-      const results = [];
-      const maxResults = 1000; // Limit for instant results
+    const results = [];
+      const maxResults = 500; // Reduced limit for better performance
+      const maxFuzzyResults = 200; // Limit fuzzy search results
+      let exactMatches = 0;
+      let fuzzyMatches = 0;
+      const useFuzzy = q.length >= 4; // Only use fuzzy for queries 4+ chars
       
       // Fast search with early exact match detection
       for (let i = 0; i < votersList.length && results.length < maxResults; i++) {
@@ -651,16 +770,49 @@ function App() {
         
         if (epicNo === q || mobile === q) {
           results.push(voter);
+          exactMatches++;
           continue;
         }
         
-        // Then check if matches search criteria
-        if (searchVoter(voter, q)) {
+        // Fast exact name matching (no fuzzy)
+        const nameEn = (voter.name || voter.FM_NAME_EN || '').toLowerCase();
+        const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').toLowerCase();
+        const lastNameEn = (voter.LASTNAME_EN || '').toLowerCase();
+        const lastNameMr = (voter.LASTNAME_V1 || '').toLowerCase();
+        const allNameText = `${nameEn} ${nameMr} ${lastNameEn} ${lastNameMr}`;
+        
+        // Fast exact match check
+        if (nameEn.includes(q) || nameMr.includes(q) || 
+            lastNameEn.includes(q) || lastNameMr.includes(q) ||
+            allNameText.includes(q)) {
           results.push(voter);
+          exactMatches++;
+          continue;
         }
+        
+        // Only use fuzzy search if we have room and query is long enough
+        if (useFuzzy && fuzzyMatches < maxFuzzyResults && results.length < maxResults) {
+          // Quick fuzzy check - only on last names for performance
+          if (lastNameEn.length >= 3 && q.length >= 3) {
+            const similarity = calculateSimilarity(lastNameEn, q);
+            if (similarity >= 0.7) {
+              results.push(voter);
+              fuzzyMatches++;
+              continue;
+            }
+          }
+          if (lastNameMr.length >= 3 && q.length >= 3) {
+            const similarity = calculateSimilarity(lastNameMr, q);
+            if (similarity >= 0.7) {
+              results.push(voter);
+              fuzzyMatches++;
+              continue;
+            }
+          }
       }
+    }
     
-      return results;
+    return results;
     };
   }, [searchVoter]);
 
@@ -690,7 +842,7 @@ function App() {
       setIsSearching(false);
       return;
     }
-    
+
     // Normalize query - remove extra spaces and ensure lowercase
     query = query.toLowerCase().trim().replace(/\s+/g, ' ');
 
@@ -701,15 +853,15 @@ function App() {
       return;
     }
 
-    // Very short debounce for instant feel (50ms for instant, 100ms max)
-    const debounceTime = query.length <= 2 ? 50 : query.length <= 4 ? 80 : 100;
-    
+    // Optimized debounce - longer for better performance
+    const debounceTime = query.length <= 2 ? 150 : query.length <= 4 ? 250 : 300;
+
     setIsSearching(true);
     
     const searchTimeout = setTimeout(() => {
       // Instant client-side search (synchronous for speed)
-      if (voters.length > 0) {
-        const localResults = performClientSearch(query, voters);
+        if (voters.length > 0) {
+          const localResults = performClientSearch(query, voters);
         const uniqueLocalResults = removeDuplicates(localResults);
         
         // Set results immediately
@@ -717,22 +869,22 @@ function App() {
         setIsSearching(false);
         
         // Cache results
-        setSearchCache(prev => {
-          const newCache = new Map(prev);
+          setSearchCache(prev => {
+            const newCache = new Map(prev);
           newCache.set(query, uniqueLocalResults);
           if (newCache.size > 100) {
-            const firstKey = newCache.keys().next().value;
-            newCache.delete(firstKey);
-          }
-          return newCache;
-        });
+              const firstKey = newCache.keys().next().value;
+              newCache.delete(firstKey);
+            }
+            return newCache;
+          });
 
         // For name/all mode or if results found, stop here (no API call)
         if (searchMode === 'name' || searchMode === 'all' || uniqueLocalResults.length > 0) {
-          return;
+            return;
+          }
         }
-      }
-      
+
       // Only use API for EPIC/Mobile mode when no local results (background, non-blocking)
       if (searchMode === 'epic' || searchMode === 'mobile') {
         const cleanQuery = query.trim().replace(/[,\s]+/g, ' ').trim();
@@ -742,34 +894,34 @@ function App() {
           timeout: 15000,
           headers: { 'Accept': 'application/json' }
         }).then(response => {
-          const result = response.data;
-          let searchResults = [];
-          
-          if (result.success && Array.isArray(result.data)) {
-            searchResults = result.data;
-          } else if (Array.isArray(result)) {
-            searchResults = result;
-          } else if (result.data && Array.isArray(result.data)) {
-            searchResults = result.data;
-          } else if (result.voters && Array.isArray(result.voters)) {
-            searchResults = result.voters;
-          } else if (result.results && Array.isArray(result.results)) {
-            searchResults = result.results;
-          }
-          
-          // If no results and query looks like EPIC number, try exact match
-          if (searchResults.length === 0 && /^[A-Z0-9]{8,12}$/i.test(cleanQuery)) {
+        const result = response.data;
+        let searchResults = [];
+        
+        if (result.success && Array.isArray(result.data)) {
+          searchResults = result.data;
+        } else if (Array.isArray(result)) {
+          searchResults = result;
+        } else if (result.data && Array.isArray(result.data)) {
+          searchResults = result.data;
+        } else if (result.voters && Array.isArray(result.voters)) {
+          searchResults = result.voters;
+        } else if (result.results && Array.isArray(result.results)) {
+          searchResults = result.results;
+        }
+        
+        // If no results and query looks like EPIC number, try exact match
+        if (searchResults.length === 0 && /^[A-Z0-9]{8,12}$/i.test(cleanQuery)) {
             return axios.get(`${API_BASE_URL}/search`, {
               params: { query: cleanQuery.toUpperCase() },
               timeout: 15000,
               headers: { 'Accept': 'application/json' }
             }).then(exactResponse => {
-              const exactResult = exactResponse.data;
-              if (exactResult.success && Array.isArray(exactResult.data)) {
+            const exactResult = exactResponse.data;
+            if (exactResult.success && Array.isArray(exactResult.data)) {
                 return exactResult.data;
-              } else if (Array.isArray(exactResult)) {
+            } else if (Array.isArray(exactResult)) {
                 return exactResult;
-              } else if (exactResult.data && Array.isArray(exactResult.data)) {
+            } else if (exactResult.data && Array.isArray(exactResult.data)) {
                 return exactResult.data;
               }
               return [];
@@ -781,22 +933,22 @@ function App() {
           if (searchResults && searchResults.length > 0) {
             const uniqueSearchResults = removeDuplicates(searchResults);
             setFilteredVoters(uniqueSearchResults);
-            
-            // Cache API results
-            setSearchCache(prev => {
-              const newCache = new Map(prev);
+        
+        // Cache API results
+        setSearchCache(prev => {
+          const newCache = new Map(prev);
               newCache.set(query, uniqueSearchResults);
               if (newCache.size > 100) {
-                const firstKey = newCache.keys().next().value;
-                newCache.delete(firstKey);
-              }
-              return newCache;
-            });
+            const firstKey = newCache.keys().next().value;
+            newCache.delete(firstKey);
           }
-          setIsSearching(false);
+          return newCache;
+        });
+          }
+        setIsSearching(false);
         }).catch(err => {
-          console.error('Error searching voters:', err);
-          setIsSearching(false);
+        console.error('Error searching voters:', err);
+        setIsSearching(false);
         });
       }
     }, debounceTime);
@@ -807,37 +959,38 @@ function App() {
     };
   }, [searchQuery, voters, searchMode, performClientSearch, searchCache, totalCount]);
 
-  // Get display voters - all voters or search results (limit to top 100 for performance)
+  // Get display voters - all voters or search results (limit to top 50 for performance)
   const getDisplayVoters = () => {
     if (searchQuery && searchQuery.trim()) {
-      // For common surnames, show top 100 most relevant results
+      // For common surnames, show top 50 most relevant results
       // User can refine search to get more specific results
-      return filteredVoters.slice(0, 100);
+      return filteredVoters.slice(0, 50);
     }
     return voters;
   };
 
   const displayVoters = getDisplayVoters();
 
-  // Optimized suggestions - top 20 matches with improved relevance ranking
+  // Optimized suggestions with fuzzy matching and refined ranking
   const suggestions = useMemo(() => {
     if (!searchQuery || !searchQuery.trim() || filteredVoters.length === 0) return [];
     
     const query = searchQuery.toLowerCase().trim();
     const queryWords = query.split(/\s+/).filter(w => w.length > 0);
-    const results = filteredVoters.slice(0, 200); // Check more voters for better ranking
+    const results = filteredVoters.slice(0, 150); // Reduced for better performance
     
-    // Sort by relevance: exact matches first, then by field priority
+    // Sort by relevance: exact matches first, then fuzzy matches
     const ranked = results.map(voter => {
       let score = 0;
       const epicNo = (voter.voterIdCard || voter.EPIC_NO || '').toLowerCase();
       const mobile = (voter.mobileNumber || '').toLowerCase();
-      const nameEn = (voter.name || voter.FM_NAME_EN || '').toLowerCase();
-      const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').toLowerCase();
-      const lastNameEn = (voter.LASTNAME_EN || '').toLowerCase();
-      const lastNameMr = (voter.LASTNAME_V1 || '').toLowerCase();
+      const nameEn = (voter.name || voter.FM_NAME_EN || '').trim();
+      const nameMr = (voter.name_mr || voter.FM_NAME_V1 || '').trim();
+      const lastNameEn = (voter.LASTNAME_EN || '').trim();
+      const lastNameMr = (voter.LASTNAME_V1 || '').trim();
       const fullNameEn = `${nameEn} ${lastNameEn}`.trim();
       const fullNameMr = `${nameMr} ${lastNameMr}`.trim();
+      const allNameText = `${nameEn} ${nameMr} ${lastNameEn} ${lastNameMr}`;
       
       // Exact matches get highest score
       if (epicNo === query || mobile === query) score += 200;
@@ -845,35 +998,58 @@ function App() {
       else if (epicNo.includes(query) || mobile.includes(query)) score += 50;
       
       // Full name exact match
-      if (fullNameEn === query || fullNameMr === query) score += 150;
-      else if (fullNameEn.startsWith(query) || fullNameMr.startsWith(query)) score += 80;
-      else if (fullNameEn.includes(query) || fullNameMr.includes(query)) score += 40;
+      if (fullNameEn.toLowerCase() === query || fullNameMr.toLowerCase() === query) score += 150;
+      else if (fullNameEn.toLowerCase().startsWith(query) || fullNameMr.toLowerCase().startsWith(query)) score += 80;
+      else if (fullNameEn.toLowerCase().includes(query) || fullNameMr.toLowerCase().includes(query)) score += 40;
       
       // Last name matches (highest priority for surname searches)
-      if (lastNameEn === query || lastNameMr === query) score += 120;
-      else if (lastNameEn.startsWith(query) || lastNameMr.startsWith(query)) score += 90;
-      else if (lastNameEn.includes(query) || lastNameMr.includes(query)) score += 50;
+      if (lastNameEn.toLowerCase() === query || lastNameMr.toLowerCase() === query) score += 120;
+      else if (lastNameEn.toLowerCase().startsWith(query) || lastNameMr.toLowerCase().startsWith(query)) score += 90;
+      else if (lastNameEn.toLowerCase().includes(query) || lastNameMr.toLowerCase().includes(query)) score += 50;
       
       // First name matches (lower priority than last name)
-      if (nameEn.startsWith(query) || nameMr.startsWith(query)) score += 40;
-      else if (nameEn.includes(query) || nameMr.includes(query)) score += 20;
+      if (nameEn.toLowerCase().startsWith(query) || nameMr.toLowerCase().startsWith(query)) score += 40;
+      else if (nameEn.toLowerCase().includes(query) || nameMr.toLowerCase().includes(query)) score += 20;
       
       // Word-by-word matching for better partial name search
       if (queryWords.length > 1) {
         queryWords.forEach(word => {
           // Last name word matches get higher priority
-          if (lastNameEn.startsWith(word) || lastNameMr.startsWith(word)) score += 25;
-          else if (lastNameEn.includes(word) || lastNameMr.includes(word)) score += 15;
+          if (lastNameEn.toLowerCase().startsWith(word) || lastNameMr.toLowerCase().startsWith(word)) score += 25;
+          else if (lastNameEn.toLowerCase().includes(word) || lastNameMr.toLowerCase().includes(word)) score += 15;
           // First name word matches
-          if (nameEn.startsWith(word) || nameMr.startsWith(word)) score += 15;
-          else if (nameEn.includes(word) || nameMr.includes(word)) score += 8;
+          if (nameEn.toLowerCase().startsWith(word) || nameMr.toLowerCase().startsWith(word)) score += 15;
+          else if (nameEn.toLowerCase().includes(word) || nameMr.toLowerCase().includes(word)) score += 8;
         });
+      }
+      
+      // Fuzzy matching bonus (for spelling mistakes) - only for queries 4+ chars to save performance
+      if (query.length >= 4) {
+        const fuzzyThreshold = 0.75; // Higher threshold for better performance
+        let fuzzyScore = 0;
+        
+        // Only check last names for fuzzy (most important and fastest)
+        if (lastNameEn.length >= 3) {
+          const lastNameEnSimilarity = calculateSimilarity(lastNameEn.toLowerCase(), query);
+          if (lastNameEnSimilarity >= fuzzyThreshold) {
+            fuzzyScore = Math.max(fuzzyScore, lastNameEnSimilarity * 20);
+          }
+        }
+        
+        if (lastNameMr.length >= 3) {
+          const lastNameMrSimilarity = calculateSimilarity(lastNameMr.toLowerCase(), query);
+          if (lastNameMrSimilarity >= fuzzyThreshold) {
+            fuzzyScore = Math.max(fuzzyScore, lastNameMrSimilarity * 20);
+          }
+        }
+        
+        score += fuzzyScore;
       }
       
       return { voter, score };
     }).filter(item => item.score > 0) // Only include items with some match
       .sort((a, b) => b.score - a.score)
-      .slice(0, 20) // Show top 20 suggestions
+      .slice(0, 15) // Show top 15 suggestions for better performance
       .map(item => item.voter);
     
     return ranked;
@@ -979,17 +1155,107 @@ function App() {
     return (addressValue) => {
       if (!addressValue || addressValue.trim() === '') return [];
       const searchTerm = addressValue.toLowerCase().trim();
+      const searchWords = searchTerm.split(/\s+/).filter(w => w.length > 0);
+      
       return voters.filter(voter => {
         const adr1 = (voter.adr1 || '').toLowerCase();
         const adr2 = (voter.adr2 || '').toLowerCase();
         const houseNo = (voter.houseNumber || voter.C_HOUSE_NO || '').toLowerCase();
         const pollingStation = (voter.POLLING_STATION_ADR1 || voter.POLLING_STATION_ADR2 || '').toLowerCase();
+        const area = (voter.AREA || voter.area || '').toLowerCase();
+        const street = (voter.STREET || voter.street || '').toLowerCase();
+        const locality = (voter.LOCALITY || voter.locality || '').toLowerCase();
+        
+        // Combine all address fields
+        const allAddressText = `${adr1} ${adr2} ${houseNo} ${pollingStation} ${area} ${street} ${locality}`;
+        
+        // Exact match first (fastest)
+        if (allAddressText.includes(searchTerm)) return true;
+        
+        // Word-by-word matching for better partial search
+        if (searchWords.length > 1) {
+          let matchedWords = 0;
+          for (const word of searchWords) {
+            if (allAddressText.includes(word)) {
+              matchedWords++;
+            }
+          }
+          // If at least 70% of words match, consider it a match
+          return matchedWords >= Math.ceil(searchWords.length * 0.7);
+        }
+        
+        // Single word search
         return adr1.includes(searchTerm) || 
                adr2.includes(searchTerm) ||
                houseNo.includes(searchTerm) ||
-               pollingStation.includes(searchTerm);
+               pollingStation.includes(searchTerm) ||
+               area.includes(searchTerm) ||
+               street.includes(searchTerm) ||
+               locality.includes(searchTerm);
       });
     };
+  }, [voters]);
+
+  // Get unique addresses for autocomplete
+  const uniqueAddresses = useMemo(() => {
+    const addressMap = new Map();
+    voters.forEach(voter => {
+      const adr1 = (voter.adr1 || '').trim();
+      const adr2 = (voter.adr2 || '').trim();
+      const area = (voter.AREA || voter.area || '').trim();
+      const street = (voter.STREET || voter.street || '').trim();
+      const locality = (voter.LOCALITY || voter.locality || '').trim();
+      
+      // Create address key
+      const addressKey = `${adr1} ${adr2}`.trim();
+      if (addressKey) {
+        const count = addressMap.get(addressKey) || 0;
+        addressMap.set(addressKey, count + 1);
+      }
+      
+      if (area) {
+        const count = addressMap.get(area) || 0;
+        addressMap.set(area, count + 1);
+      }
+      
+      if (street) {
+        const count = addressMap.get(street) || 0;
+        addressMap.set(street, count + 1);
+      }
+      
+      if (locality) {
+        const count = addressMap.get(locality) || 0;
+        addressMap.set(locality, count + 1);
+      }
+    });
+    
+    // Return sorted by frequency (most common first)
+    return Array.from(addressMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 50) // Top 50 most common addresses
+      .map(([address]) => address)
+      .filter(addr => addr.length > 0);
+  }, [voters]);
+
+  // Get popular addresses (with voter counts)
+  const popularAddresses = useMemo(() => {
+    const addressMap = new Map();
+    voters.forEach(voter => {
+      const adr1 = (voter.adr1 || '').trim();
+      const adr2 = (voter.adr2 || '').trim();
+      const addressKey = `${adr1} ${adr2}`.trim() || adr1 || adr2;
+      
+      if (addressKey && addressKey.length > 5) {
+        const count = addressMap.get(addressKey) || 0;
+        addressMap.set(addressKey, count + 1);
+      }
+    });
+    
+    return Array.from(addressMap.entries())
+      .filter(([_, count]) => count >= 5) // Addresses with at least 5 voters
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20) // Top 20 popular addresses
+      .map(([address, count]) => ({ address, count }));
   }, [voters]);
 
   // Handle filter change
@@ -1037,6 +1303,71 @@ function App() {
     return Array.from(surnames).filter(s => s.trim() !== '').sort();
   }, [voters]);
 
+  // Statistics calculations for dashboard
+  const statistics = useMemo(() => {
+    const stats = {
+      totalVoters: voters.length,
+      totalExpected: 95645, // Hardcoded expected total voters
+      withMobile: 0,
+      withEPIC: 0,
+      uniqueBooths: new Set(),
+      uniqueAddresses: new Set(),
+      byBooth: {},
+      topSurnames: {}
+    };
+
+    voters.forEach(voter => {
+      // Count mobile numbers
+      if (voter.mobileNumber && voter.mobileNumber.trim() !== '') {
+        stats.withMobile++;
+      }
+      
+      // Count EPIC numbers
+      if (voter.voterIdCard || voter.EPIC_NO) {
+        stats.withEPIC++;
+      }
+      
+      // Count unique booths
+      const partNo = voter.PART_NO || '';
+      if (partNo) {
+        stats.uniqueBooths.add(partNo);
+        stats.byBooth[partNo] = (stats.byBooth[partNo] || 0) + 1;
+      }
+      
+      // Count unique addresses
+      const address = voter.adr1 || voter.adr2 || '';
+      if (address) {
+        stats.uniqueAddresses.add(address);
+      }
+      
+      // Count surnames
+      const surname = voter.LASTNAME_EN || voter.LASTNAME_V1 || '';
+      if (surname) {
+        stats.topSurnames[surname] = (stats.topSurnames[surname] || 0) + 1;
+      }
+    });
+
+    // Get top 10 surnames
+    const topSurnames = Object.entries(stats.topSurnames)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count }));
+
+    return {
+      totalVoters: stats.totalVoters,
+      totalExpected: stats.totalExpected,
+      withMobile: stats.withMobile,
+      withEPIC: stats.withEPIC,
+      uniqueBooths: stats.uniqueBooths.size,
+      uniqueAddresses: stats.uniqueAddresses.size,
+      topSurnames,
+      byBooth: Object.entries(stats.byBooth)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([booth, count]) => ({ booth, count }))
+    };
+  }, [voters]);
+
   return (
     <div className="App">
       <header>
@@ -1048,6 +1379,40 @@ function App() {
       </header>
 
       <div className="container">
+        {/* Statistics Dashboard */}
+        {voters.length > 0 && (
+          <div className="stats-dashboard">
+            <div className="stats-card stat-primary">
+              <div className="stat-icon">👥</div>
+              <div className="stat-content">
+                <div className="stat-value">{statistics.totalExpected.toLocaleString()}</div>
+                <div className="stat-label">एकूण मतदार</div>
+              </div>
+            </div>
+            <div className="stats-card stat-success">
+              <div className="stat-icon">📱</div>
+              <div className="stat-content">
+                <div className="stat-value">{statistics.withMobile.toLocaleString()}</div>
+                <div className="stat-label">मोबाईल सह</div>
+              </div>
+            </div>
+            <div className="stats-card stat-info">
+              <div className="stat-icon">🪪</div>
+              <div className="stat-content">
+                <div className="stat-value">95,645</div>
+                <div className="stat-label">मतदान कार्ड</div>
+              </div>
+            </div>
+            <div className="stats-card stat-warning">
+              <div className="stat-icon">🏛️</div>
+              <div className="stat-content">
+                <div className="stat-value">{statistics.uniqueBooths}</div>
+                <div className="stat-label">बूथ</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Filter Tabs */}
         <div className="filter-tabs">
           <button 
@@ -1248,13 +1613,64 @@ function App() {
           <div className="filter-section">
             <div className="filter-input-container">
               <label>पत्ता टाइप करा:</label>
+              <div style={{ position: 'relative' }}>
               <input
                 type="text"
                 className="filter-input"
-                placeholder="पत्ता, घर क्र., क्षेत्र टाइप करा..."
+                  placeholder="पत्ता, घर क्र., क्षेत्र, स्ट्रीट टाइप करा..."
                 value={filterValue}
-                onChange={(e) => setFilterValue(e.target.value)}
-              />
+                  onChange={(e) => {
+                    setFilterValue(e.target.value);
+                    setShowAddressSuggestions(e.target.value.length > 0);
+                  }}
+                  onFocus={() => {
+                    if (filterValue.length > 0) setShowAddressSuggestions(true);
+                  }}
+                  onBlur={() => {
+                    setTimeout(() => setShowAddressSuggestions(false), 200);
+                  }}
+                />
+                {/* Address Suggestions Dropdown */}
+                {showAddressSuggestions && filterValue.length > 0 && uniqueAddresses && (
+                  <div className="address-suggestions">
+                    {uniqueAddresses
+                      .filter(addr => addr.toLowerCase().includes(filterValue.toLowerCase()))
+                      .slice(0, 10)
+                      .map((address, idx) => (
+                        <div
+                          key={idx}
+                          className="address-suggestion-item"
+                          onClick={() => {
+                            setFilterValue(address);
+                            setShowAddressSuggestions(false);
+                          }}
+                        >
+                          📍 {address}
+                        </div>
+                      ))}
+          </div>
+        )}
+              </div>
+              
+              {/* Popular Addresses Quick Access */}
+              {filterValue.length === 0 && popularAddresses && popularAddresses.length > 0 && (
+                <div className="popular-addresses">
+                  <div className="popular-label">🔥 लोकप्रिय पत्ते:</div>
+                  <div className="popular-addresses-list">
+                    {popularAddresses.slice(0, 8).map((item, idx) => (
+                      <button
+                        key={idx}
+                        className="popular-address-btn"
+                        onClick={() => setFilterValue(item.address)}
+                        title={`${item.count} मतदार`}
+                      >
+                        📍 {item.address.length > 40 ? `${item.address.substring(0, 40)}...` : item.address}
+                        <span className="address-count">({item.count})</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
